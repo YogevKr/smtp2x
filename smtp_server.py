@@ -65,7 +65,7 @@ class GPT4Analyzer:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Is there a wild boar visible in this image?"},
+                            {"type": "text", "text": "Is there a person visible in this image?"},
                             {
                                 "type": "image_url",
                                 "image_url": {
