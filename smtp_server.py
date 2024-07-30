@@ -22,13 +22,14 @@ class EmailMessage:
     image_data: bytes = None
 
 class SMTPConfig:
-    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id):
+    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task):
         self.hostname = hostname
         self.max_message_size = max_message_size
         self.client_timeout = client_timeout
         self.openai_api_key = openai_api_key
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
+        self.gpt4_task = gpt4_task
 
 class MessageTransformer:
     @staticmethod
@@ -50,8 +51,9 @@ class MessageTransformer:
         )
 
 class GPT4Analyzer:
-    def __init__(self, api_key):
+    def __init__(self, api_key, task):
         self.client = AsyncOpenAI(api_key=api_key)
+        self.task = task
 
     async def analyze(self, image_data):
         logger.info("Uploading image to OpenAI GPT-4")
@@ -65,7 +67,7 @@ class GPT4Analyzer:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Is there a person visible in this image?"},
+                            {"type": "text", "text": self.task},
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -112,7 +114,7 @@ class TelegramSender:
 class ProcessingPipeline:
     def __init__(self, config):
         self.transformer = MessageTransformer()
-        self.analyzer = GPT4Analyzer(config.openai_api_key)
+        self.analyzer = GPT4Analyzer(config.openai_api_key, config.gpt4_task)
         self.sender = TelegramSender(config.telegram_bot_token, config.telegram_chat_id)
 
     async def process(self, email_data):
@@ -122,13 +124,13 @@ class ProcessingPipeline:
 
         if email_message.image_data:
             # Step 2: Analyze the image with GPT-4
-            person_detected = await self.analyzer.analyze(email_message.image_data)
+            analysis_result = await self.analyzer.analyze(email_message.image_data)
 
-            # Step 3: Send to Telegram if a person was detected
-            if person_detected:
+            # Step 3: Send to Telegram if the analysis result is positive
+            if analysis_result:
                 await self.sender.send(email_message.image_data)
             else:
-                logger.info("No person detected in the image. Not sending to Telegram.")
+                logger.info("Analysis result is negative. Not sending to Telegram.")
         else:
             logger.info("No image attachment found in the email.")
 
@@ -253,7 +255,8 @@ async def main():
         client_timeout=300,  # 5 minutes
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
-        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID")
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+        gpt4_task=os.getenv("GPT4_TASK")
     )
 
     server = SMTPServer(config)
