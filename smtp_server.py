@@ -62,7 +62,7 @@ class GPT4Analyzer:
         
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4-vision-preview",
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "user",
@@ -256,7 +256,7 @@ async def main():
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
-        gpt4_task=os.getenv("GPT4_TASK", "Is there a person visible in this image?")
+        gpt4_task=os.getenv("GPT4_TASK")
     )
 
     server = SMTPServer(config)
