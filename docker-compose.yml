@@ -10,6 +10,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - GPT4_TASK=${GPT4_TASK}
+      - PAGERDUTY_INTEGRATION_KEY=${PAGERDUTY_INTEGRATION_KEY}
     volumes:
       - ./smtp_server.py:/app/smtp_server.py
     restart: unless-stopped
