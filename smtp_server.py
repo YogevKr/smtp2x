@@ -8,6 +8,7 @@ import aiohttp
 from io import BytesIO
 from dataclasses import dataclass
 from openai import AsyncOpenAI
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -22,7 +23,7 @@ class EmailMessage:
     image_data: bytes = None
 
 class SMTPConfig:
-    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task):
+    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task, pagerduty_integration_key):
         self.hostname = hostname
         self.max_message_size = max_message_size
         self.client_timeout = client_timeout
@@ -30,6 +31,7 @@ class SMTPConfig:
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
         self.gpt4_task = gpt4_task
+        self.pagerduty_integration_key = pagerduty_integration_key
 
 class MessageTransformer:
     @staticmethod
@@ -62,7 +64,7 @@ class GPT4Analyzer:
         
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4-vision-preview",
                 messages=[
                     {
                         "role": "user",
@@ -111,11 +113,40 @@ class TelegramSender:
                 else:
                     logger.error(f"Error sending image to Telegram: {response.status}")
 
+class PagerDutyTrigger:
+    def __init__(self, integration_key):
+        self.integration_key = integration_key
+        self.url = "https://events.pagerduty.com/v2/enqueue"
+
+    async def trigger_incident(self, summary, severity, source):
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "routing_key": self.integration_key,
+            "event_action": "trigger",
+            "payload": {
+                "summary": summary,
+                "severity": severity,
+                "source": source
+            }
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.url, data=json.dumps(payload), headers=headers) as response:
+                if response.status == 202:
+                    logger.info("PagerDuty incident created successfully")
+                else:
+                    logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
+                    logger.error(f"Response: {await response.text()}")
+
 class ProcessingPipeline:
     def __init__(self, config):
         self.transformer = MessageTransformer()
         self.analyzer = GPT4Analyzer(config.openai_api_key, config.gpt4_task)
         self.sender = TelegramSender(config.telegram_bot_token, config.telegram_chat_id)
+        self.pagerduty = PagerDutyTrigger(config.pagerduty_integration_key)
 
     async def process(self, email_data):
         # Step 1: Transform the email data into an EmailMessage object
@@ -129,8 +160,14 @@ class ProcessingPipeline:
             # Step 3: Send to Telegram if the analysis result is positive
             if analysis_result:
                 await self.sender.send(email_message.image_data)
+                # Step 4: Trigger PagerDuty incident
+                await self.pagerduty.trigger_incident(
+                    summary=f"Critical image detected: {email_message.subject}",
+                    severity="critical",
+                    source="SMTP Server Image Analysis"
+                )
             else:
-                logger.info("Analysis result is negative. Not sending to Telegram.")
+                logger.info("Analysis result is negative. Not sending to Telegram or triggering PagerDuty.")
         else:
             logger.info("No image attachment found in the email.")
 
@@ -256,7 +293,8 @@ async def main():
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
-        gpt4_task=os.getenv("GPT4_TASK")
+        gpt4_task=os.getenv("GPT4_TASK"),
+        pagerduty_integration_key=os.getenv("PAGERDUTY_INTEGRATION_KEY")
     )
 
     server = SMTPServer(config)
