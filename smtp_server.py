@@ -23,7 +23,7 @@ class EmailMessage:
     image_data: bytes = None
 
 class SMTPConfig:
-    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task, pagerduty_integration_key):
+    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task, pagerduty_trigger):
         self.hostname = hostname
         self.max_message_size = max_message_size
         self.client_timeout = client_timeout
@@ -31,7 +31,7 @@ class SMTPConfig:
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
         self.gpt4_task = gpt4_task
-        self.pagerduty_integration_key = pagerduty_integration_key
+        self.pagerduty_trigger = pagerduty_trigger
 
 class MessageTransformer:
     @staticmethod
@@ -114,58 +114,87 @@ class TelegramSender:
                     logger.error(f"Error sending image to Telegram: {response.status}")
 
 class PagerDutyTrigger:
-    def __init__(self, integration_key):
-        self.integration_key = integration_key
-        self.url = "https://events.pagerduty.com/v2/enqueue"
+    def __init__(self, api_token, service_id, from_email):
+        self.api_token = api_token
+        self.service_id = service_id
+        self.from_email = from_email
+        self.url = "https://api.pagerduty.com/incidents"
 
-    async def trigger_incident(self, summary, severity, source):
+    async def trigger_incident(self, title, details, urgency="high"):
         headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.pagerduty+json;version=2",
+            "Authorization": f"Token token={self.api_token}",
+            "From": self.from_email
         }
         
         payload = {
-            "routing_key": self.integration_key,
-            "event_action": "trigger",
-            "payload": {
-                "summary": summary,
-                "severity": severity,
-                "source": source
+            "incident": {
+                "type": "incident",
+                "title": title,
+                "service": {
+                    "id": self.service_id,
+                    "type": "service_reference"
+                },
+                "urgency": urgency,
+                "body": {
+                    "type": "incident_body",
+                    "details": details
+                }
             }
         }
         
         async with aiohttp.ClientSession() as session:
-            async with session.post(self.url, data=json.dumps(payload), headers=headers) as response:
-                if response.status == 202:
-                    logger.info("PagerDuty incident created successfully")
-                else:
-                    logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
-                    logger.error(f"Response: {await response.text()}")
+            try:
+                async with session.post(self.url, json=payload, headers=headers) as response:
+                    response_text = await response.text()
+                    if response.status == 201:
+                        logger.info("PagerDuty incident created successfully")
+                        return json.loads(response_text)
+                    else:
+                        logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
+                        logger.error(f"Response: {response_text}")
+                        logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
+                        logger.error(f"Request headers: {json.dumps(headers, indent=2)}")
+                        try:
+                            error_data = json.loads(response_text)
+                            if 'error' in error_data:
+                                logger.error(f"Error message: {error_data['error'].get('message')}")
+                                logger.error(f"Error code: {error_data['error'].get('code')}")
+                        except json.JSONDecodeError:
+                            logger.error("Could not parse error response as JSON")
+                        return None
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error when creating PagerDuty incident: {str(e)}")
+            except Exception as e:
+                logger.error(f"Unexpected error when creating PagerDuty incident: {str(e)}")
+        return None
 
 class ProcessingPipeline:
     def __init__(self, config):
         self.transformer = MessageTransformer()
         self.analyzer = GPT4Analyzer(config.openai_api_key, config.gpt4_task)
         self.sender = TelegramSender(config.telegram_bot_token, config.telegram_chat_id)
-        self.pagerduty = PagerDutyTrigger(config.pagerduty_integration_key)
+        self.pagerduty = config.pagerduty_trigger
 
     async def process(self, email_data):
-        # Step 1: Transform the email data into an EmailMessage object
         email_message = await self.transformer.transform(email_data)
         logger.info(f"Processed email: From: {email_message.sender}, Subject: {email_message.subject}")
 
         if email_message.image_data:
-            # Step 2: Analyze the image with GPT-4
             analysis_result = await self.analyzer.analyze(email_message.image_data)
 
-            # Step 3: Send to Telegram if the analysis result is positive
             if analysis_result:
                 await self.sender.send(email_message.image_data)
-                # Step 4: Trigger PagerDuty incident
-                await self.pagerduty.trigger_incident(
-                    summary=f"Critical image detected: {email_message.subject}",
-                    severity="critical",
-                    source="SMTP Server Image Analysis"
+                incident = await self.pagerduty.trigger_incident(
+                    title=f"Critical image detected: {email_message.subject}",
+                    details=f"A critical image was detected in an email from {email_message.sender}. Subject: {email_message.subject}",
+                    urgency="high"
                 )
+                if incident:
+                    logger.info(f"PagerDuty incident created: {incident.get('incident', {}).get('id')}")
+                else:
+                    logger.error("Failed to create PagerDuty incident")
             else:
                 logger.info("Analysis result is negative. Not sending to Telegram or triggering PagerDuty.")
         else:
@@ -286,6 +315,10 @@ class SMTPSession:
         await self.write_response("235 Authentication successful")
 
 async def main():
+    pagerduty_token = os.getenv("PAGERDUTY_API_TOKEN")
+    pagerduty_service_id = os.getenv("PAGERDUTY_SERVICE_ID")
+    pagerduty_from_email = os.getenv("PAGERDUTY_FROM_EMAIL")
+    
     config = SMTPConfig(
         hostname="192.168.40.191",
         max_message_size=50 * 1024 * 1024,  # 50 MB
@@ -294,7 +327,7 @@ async def main():
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
         gpt4_task=os.getenv("GPT4_TASK"),
-        pagerduty_integration_key=os.getenv("PAGERDUTY_INTEGRATION_KEY")
+        pagerduty_trigger=PagerDutyTrigger(pagerduty_token, pagerduty_service_id, pagerduty_from_email)
     )
 
     server = SMTPServer(config)
