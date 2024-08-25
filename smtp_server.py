@@ -9,6 +9,8 @@ from io import BytesIO
 from dataclasses import dataclass
 from openai import AsyncOpenAI
 import json
+from pydantic import BaseModel
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -21,6 +23,10 @@ class EmailMessage:
     subject: str
     body: str
     image_data: bytes = None
+
+class AnalyticEvent(BaseModel):
+    analysis: str
+    result: bool
 
 class SMTPConfig:
     def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task, pagerduty_trigger):
@@ -63,8 +69,8 @@ class GPT4Analyzer:
         base64_image = base64.b64encode(image_data).decode('utf-8')
         
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4o",
+            response = await self.client.beta.chat.completions.parse(
+                model="gpt-4o-2024-08-06",
                 messages=[
                     {
                         "role": "user",
@@ -79,12 +85,12 @@ class GPT4Analyzer:
                         ]
                     }
                 ],
-                max_tokens=300
+                response_format=AnalyticEvent
             )
             
-            answer = response.choices[0].message.content
-            logger.info(f"GPT-4 response: {answer}")
-            return 'yes' in answer.lower()
+            event = response.choices[0].message.parsed
+            logger.info(f"GPT-4 response: {response}")
+            return event.result
         except Exception as e:
             logger.error(f"Error from OpenAI API: {str(e)}")
             return False
