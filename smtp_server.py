@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from openai import AsyncOpenAI
 import json
 from pydantic import BaseModel
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -42,8 +43,8 @@ class SMTPConfig:
         self.pagerduty_trigger = pagerduty_trigger
 
 class MessageTransformer:
-    @newrelic.agent.function_trace()
     @staticmethod
+    @newrelic.agent.function_trace()
     async def transform(email_data):
         email_message = message_from_bytes(email_data, policy=default)
         
@@ -174,16 +175,7 @@ class PagerDutyTrigger:
                         else:
                             logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
                             logger.error(f"Response: {response_text}")
-                            logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
-                            logger.error(f"Request headers: {json.dumps(headers, indent=2)}")
                             newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'error', 'error_code': response.status})
-                            try:
-                                error_data = json.loads(response_text)
-                                if 'error' in error_data:
-                                    logger.error(f"Error message: {error_data['error'].get('message')}")
-                                    logger.error(f"Error code: {error_data['error'].get('code')}")
-                            except json.JSONDecodeError:
-                                logger.error("Could not parse error response as JSON")
                             return None
             except aiohttp.ClientError as e:
                 logger.error(f"Network error when creating PagerDuty incident: {str(e)}")
@@ -228,15 +220,24 @@ class SMTPServer:
     def __init__(self, config):
         self.config = config
         self.pipeline = ProcessingPipeline(config)
+        self.is_running = False
+        self.server = None
 
-    @newrelic.agent.background_task()
+    @newrelic.agent.background_task(name='smtp2x_start_server')
     async def start(self, host, port):
-        server = await asyncio.start_server(self.handle_client, host, port)
-        addr = server.sockets[0].getsockname()
-        logger.info(f'SMTP server listening on {addr}')
+        self.is_running = True
+        self.server = await asyncio.start_server(self.handle_client, host, port)
+        addr = self.server.sockets[0].getsockname()
+        logger.info(f'smtp2x service listening on {addr}')
 
-        async with server:
-            await server.serve_forever()
+        async with self.server:
+            await self.server.serve_forever()
+
+    def stop(self):
+        logger.info("Stopping smtp2x service")
+        self.is_running = False
+        if self.server:
+            self.server.close()
 
     @newrelic.agent.function_trace()
     async def handle_client(self, reader, writer):
@@ -367,6 +368,7 @@ async def heartbeat(server):
                 'timestamp': time.time()
             })
             logger.warning("smtp2x service is not running. Sent stopped status to New Relic")
+            break  # Exit the heartbeat loop if the server is not running
         
         # Wait for 60 seconds before sending the next heartbeat
         await asyncio.sleep(60)
