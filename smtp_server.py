@@ -354,4 +354,42 @@ class SMTPSession:
 
 @newrelic.agent.background_task()
 async def main():
-    pagerduty_token = os.getenv("PAGERDUTY_API_TOKEN
+    pagerduty_token = os.getenv("PAGERDUTY_API_TOKEN")
+    pagerduty_service_id = os.getenv("PAGERDUTY_SERVICE_ID")
+    pagerduty_from_email = os.getenv("PAGERDUTY_FROM_EMAIL")
+    
+    config = SMTPConfig(
+        hostname="192.168.40.191",
+        max_message_size=50 * 1024 * 1024,  # 50 MB
+        client_timeout=300,  # 5 minutes
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+        gpt4_task=os.getenv("GPT4_TASK"),
+        pagerduty_trigger=PagerDutyTrigger(pagerduty_token, pagerduty_service_id, pagerduty_from_email)
+    )
+
+    # Record custom event for server start
+    newrelic.agent.record_custom_event('SMTPServerStart', {
+        'hostname': config.hostname,
+        'max_message_size': config.max_message_size,
+        'client_timeout': config.client_timeout
+    })
+
+    server = SMTPServer(config)
+    try:
+        await server.start('0.0.0.0', 2525)
+    except Exception as e:
+        logger.error(f"Error starting SMTP server: {str(e)}")
+        newrelic.agent.record_exception()
+        # Record custom event for server error
+        newrelic.agent.record_custom_event('SMTPServerError', {
+            'error': str(e)
+        })
+
+if __name__ == "__main__":
+    # Set up New Relic application
+    newrelic.agent.register_application(name='SMTP Server')
+    
+    # Run the main function
+    asyncio.run(main())
