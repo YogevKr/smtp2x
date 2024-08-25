@@ -13,6 +13,8 @@ services:
       - PAGERDUTY_FROM_EMAIL=${PAGERDUTY_FROM_EMAIL}
       - PAGERDUTY_API_TOKEN=${PAGERDUTY_API_TOKEN}
       - PAGERDUTY_SERVICE_ID=${PAGERDUTY_SERVICE_ID}
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY}
+      - NEW_RELIC_APP_NAME=${NEW_RELIC_APP_NAME}
     volumes:
       - ./smtp_server.py:/app/smtp_server.py
     restart: unless-stopped
