@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the required packages
-RUN pip install --no-cache-dir aiohttp openai pydantic
+RUN pip install --no-cache-dir aiohttp openai pydantic newrelic
 
 # Copy the Python script into the container
 COPY smtp_server.py .
