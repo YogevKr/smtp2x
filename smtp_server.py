@@ -235,6 +235,7 @@ class SMTPSession:
         self.remote_addr = writer.get_extra_info('peername')
         logger.info(f"New connection from {self.remote_addr}")
 
+    @newrelic.agent.background_task()
     async def handle(self):
         try:
             await self.write_response(f"220 {self.config.hostname} SMTP Server")
