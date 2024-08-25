@@ -357,14 +357,10 @@ class SMTPSession:
 async def heartbeat(server):
     while True:
         if server.is_running:
-            newrelic.agent.record_custom_event('smtp2xHeartbeat', {
-                'status': 'running',
-            })
+            newrelic.agent.record_metric('smtp2xHeartbeat', 1)  # Increment metric for running status
             logger.info("Sent heartbeat to New Relic")
         else:
-            newrelic.agent.record_custom_event('smtp2xHeartbeat', {
-                'status': 'stopped',
-            })
+            newrelic.agent.record_metric('smtp2xHeartbeat', 0)  # Set metric for stopped status
             logger.warning("smtp2x service is not running. Sent stopped status to New Relic")
             break  # Exit the heartbeat loop if the server is not running
         
