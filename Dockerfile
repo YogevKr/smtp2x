@@ -20,5 +20,6 @@ COPY smtp_server.py .
 EXPOSE 2525
 
 # Run smtp_server.py when the container launches
-CMD ["python", "smtp_server.py"]
+CMD ["newrelic-admin", "run-program", "python", "smtp_server.py"]
+
 
