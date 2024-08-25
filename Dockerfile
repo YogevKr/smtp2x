@@ -5,7 +5,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install the required packages
-RUN pip install --no-cache-dir aiohttp openai
+RUN pip install --no-cache-dir aiohttp openai pydantic
 
 # Copy the Python script into the container
 COPY smtp_server.py .
