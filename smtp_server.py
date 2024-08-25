@@ -1,3 +1,6 @@
+import newrelic.agent
+newrelic.agent.initialize()
+
 import asyncio
 import logging
 from email import message_from_bytes
