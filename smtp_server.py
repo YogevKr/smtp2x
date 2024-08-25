@@ -352,7 +352,26 @@ class SMTPSession:
         # For now, accept any credentials
         await self.write_response("235 Authentication successful")
 
-@newrelic.agent.background_task()
+@newrelic.agent.background_task(name='smtp2x_heartbeat')
+async def heartbeat(server):
+    while True:
+        if server.is_running:
+            newrelic.agent.record_custom_event('smtp2xHeartbeat', {
+                'status': 'running',
+                'timestamp': time.time()
+            })
+            logger.info("Sent heartbeat to New Relic")
+        else:
+            newrelic.agent.record_custom_event('smtp2xHeartbeat', {
+                'status': 'stopped',
+                'timestamp': time.time()
+            })
+            logger.warning("smtp2x service is not running. Sent stopped status to New Relic")
+        
+        # Wait for 60 seconds before sending the next heartbeat
+        await asyncio.sleep(60)
+
+@newrelic.agent.background_task(name='smtp2x_main')
 async def main():
     pagerduty_token = os.getenv("PAGERDUTY_API_TOKEN")
     pagerduty_service_id = os.getenv("PAGERDUTY_SERVICE_ID")
@@ -370,26 +389,40 @@ async def main():
     )
 
     # Record custom event for server start
-    newrelic.agent.record_custom_event('SMTPServerStart', {
+    newrelic.agent.record_custom_event('smtp2xStart', {
         'hostname': config.hostname,
         'max_message_size': config.max_message_size,
         'client_timeout': config.client_timeout
     })
 
     server = SMTPServer(config)
+    
+    # Create tasks for running the server and the heartbeat
+    server_task = asyncio.create_task(server.start('0.0.0.0', 2525))
+    heartbeat_task = asyncio.create_task(heartbeat(server))
+    
     try:
-        await server.start('0.0.0.0', 2525)
+        # Wait for both tasks concurrently
+        await asyncio.gather(server_task, heartbeat_task)
     except Exception as e:
-        logger.error(f"Error starting SMTP server: {str(e)}")
+        logger.error(f"Error in smtp2x service or heartbeat: {str(e)}")
         newrelic.agent.record_exception()
         # Record custom event for server error
-        newrelic.agent.record_custom_event('SMTPServerError', {
+        newrelic.agent.record_custom_event('smtp2xError', {
             'error': str(e)
         })
+    finally:
+        server.stop()
+        # Cancel the heartbeat task
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
     # Set up New Relic application
-    newrelic.agent.register_application(name='SMTP Server')
+    newrelic.agent.register_application(name='smtp2x')
     
     # Run the main function
     asyncio.run(main())
