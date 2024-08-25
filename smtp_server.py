@@ -14,7 +14,6 @@ from openai import AsyncOpenAI
 import json
 from pydantic import BaseModel
 
-
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -43,6 +42,7 @@ class SMTPConfig:
         self.pagerduty_trigger = pagerduty_trigger
 
 class MessageTransformer:
+    @newrelic.agent.function_trace()
     @staticmethod
     async def transform(email_data):
         email_message = message_from_bytes(email_data, policy=default)
@@ -66,36 +66,40 @@ class GPT4Analyzer:
         self.client = AsyncOpenAI(api_key=api_key)
         self.task = task
 
+    @newrelic.agent.function_trace()
     async def analyze(self, image_data):
         logger.info("Uploading image to OpenAI GPT-4")
         
         base64_image = base64.b64encode(image_data).decode('utf-8')
         
         try:
-            response = await self.client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": self.task},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
+            with newrelic.agent.FunctionTrace(name='gpt4_api_call', group='External'):
+                response = await self.client.beta.chat.completions.parse(
+                    model="gpt-4o-2024-08-06",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": self.task},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}"
+                                    }
                                 }
-                            }
-                        ]
-                    }
-                ],
-                response_format=AnalyticEvent
-            )
+                            ]
+                        }
+                    ],
+                    response_format=AnalyticEvent
+                )
             
             event = response.choices[0].message.parsed
             logger.info(f"GPT-4 response: {response}")
+            newrelic.agent.record_custom_event('GPT4Analysis', {'result': event.result})
             return event.result
         except Exception as e:
             logger.error(f"Error from OpenAI API: {str(e)}")
+            newrelic.agent.record_exception()
             return False
 
 class TelegramSender:
@@ -103,6 +107,7 @@ class TelegramSender:
         self.bot_token = bot_token
         self.chat_id = chat_id
 
+    @newrelic.agent.function_trace()
     async def send(self, image_data):
         logger.info("Sending image to Telegram")
         
@@ -116,11 +121,14 @@ class TelegramSender:
         form.add_field('photo', image_file)
         
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=form) as response:
-                if response.status == 200:
-                    logger.info("Image sent to Telegram successfully")
-                else:
-                    logger.error(f"Error sending image to Telegram: {response.status}")
+            with newrelic.agent.FunctionTrace(name='telegram_api_call', group='External'):
+                async with session.post(url, data=form) as response:
+                    if response.status == 200:
+                        logger.info("Image sent to Telegram successfully")
+                        newrelic.agent.record_custom_event('TelegramSend', {'status': 'success'})
+                    else:
+                        logger.error(f"Error sending image to Telegram: {response.status}")
+                        newrelic.agent.record_custom_event('TelegramSend', {'status': 'error', 'error_code': response.status})
 
 class PagerDutyTrigger:
     def __init__(self, api_token, service_id, from_email):
@@ -129,6 +137,7 @@ class PagerDutyTrigger:
         self.from_email = from_email
         self.url = "https://api.pagerduty.com/incidents"
 
+    @newrelic.agent.function_trace()
     async def trigger_incident(self, title, details, urgency="high"):
         headers = {
             "Content-Type": "application/json",
@@ -155,28 +164,33 @@ class PagerDutyTrigger:
         
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(self.url, json=payload, headers=headers) as response:
-                    response_text = await response.text()
-                    if response.status == 201:
-                        logger.info("PagerDuty incident created successfully")
-                        return json.loads(response_text)
-                    else:
-                        logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
-                        logger.error(f"Response: {response_text}")
-                        logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
-                        logger.error(f"Request headers: {json.dumps(headers, indent=2)}")
-                        try:
-                            error_data = json.loads(response_text)
-                            if 'error' in error_data:
-                                logger.error(f"Error message: {error_data['error'].get('message')}")
-                                logger.error(f"Error code: {error_data['error'].get('code')}")
-                        except json.JSONDecodeError:
-                            logger.error("Could not parse error response as JSON")
-                        return None
+                with newrelic.agent.FunctionTrace(name='pagerduty_api_call', group='External'):
+                    async with session.post(self.url, json=payload, headers=headers) as response:
+                        response_text = await response.text()
+                        if response.status == 201:
+                            logger.info("PagerDuty incident created successfully")
+                            newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'success'})
+                            return json.loads(response_text)
+                        else:
+                            logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
+                            logger.error(f"Response: {response_text}")
+                            logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
+                            logger.error(f"Request headers: {json.dumps(headers, indent=2)}")
+                            newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'error', 'error_code': response.status})
+                            try:
+                                error_data = json.loads(response_text)
+                                if 'error' in error_data:
+                                    logger.error(f"Error message: {error_data['error'].get('message')}")
+                                    logger.error(f"Error code: {error_data['error'].get('code')}")
+                            except json.JSONDecodeError:
+                                logger.error("Could not parse error response as JSON")
+                            return None
             except aiohttp.ClientError as e:
                 logger.error(f"Network error when creating PagerDuty incident: {str(e)}")
+                newrelic.agent.record_exception()
             except Exception as e:
                 logger.error(f"Unexpected error when creating PagerDuty incident: {str(e)}")
+                newrelic.agent.record_exception()
         return None
 
 class ProcessingPipeline:
@@ -186,6 +200,7 @@ class ProcessingPipeline:
         self.sender = TelegramSender(config.telegram_bot_token, config.telegram_chat_id)
         self.pagerduty = config.pagerduty_trigger
 
+    @newrelic.agent.function_trace()
     async def process(self, email_data):
         email_message = await self.transformer.transform(email_data)
         logger.info(f"Processed email: From: {email_message.sender}, Subject: {email_message.subject}")
@@ -214,6 +229,7 @@ class SMTPServer:
         self.config = config
         self.pipeline = ProcessingPipeline(config)
 
+    @newrelic.agent.background_task()
     async def start(self, host, port):
         server = await asyncio.start_server(self.handle_client, host, port)
         addr = server.sockets[0].getsockname()
@@ -222,6 +238,7 @@ class SMTPServer:
         async with server:
             await server.serve_forever()
 
+    @newrelic.agent.function_trace()
     async def handle_client(self, reader, writer):
         session = SMTPSession(self, reader, writer, self.config)
         await session.handle()
@@ -262,24 +279,29 @@ class SMTPSession:
 
         except Exception as e:
             logger.error(f"Error handling client {self.remote_addr}: {e}", exc_info=True)
+            newrelic.agent.record_exception()
         finally:
             logger.info(f"Closing connection from {self.remote_addr}")
             self.writer.close()
             await self.writer.wait_closed()
 
+    @newrelic.agent.function_trace()
     async def read_line(self):
         try:
             line = await asyncio.wait_for(self.reader.readline(), timeout=self.config.client_timeout)
             return line.decode().strip()
         except asyncio.TimeoutError:
             logger.warning(f"Timeout reading from client {self.remote_addr}")
+            newrelic.agent.record_custom_event('SMTPTimeout', {'remote_addr': str(self.remote_addr)})
             return None
 
+    @newrelic.agent.function_trace()
     async def write_response(self, response):
         logger.debug(f"Sending response: {response}")
         self.writer.write(f"{response}\r\n".encode())
         await self.writer.drain()
 
+    @newrelic.agent.function_trace()
     async def handle_ehlo(self, line):
         logger.info(f"EHLO command received: {line}")
         await self.write_response(f"250-{self.config.hostname}")
@@ -289,18 +311,22 @@ class SMTPSession:
         await self.write_response("250-AUTH LOGIN PLAIN")
         await self.write_response("250 HELP")
 
+    @newrelic.agent.function_trace()
     async def handle_helo(self, line):
         logger.info(f"HELO command received: {line}")
         await self.write_response(f"250 Hello {line.split()[1]}")
 
+    @newrelic.agent.function_trace()
     async def handle_mail(self, line):
         logger.info(f"MAIL FROM command received: {line}")
         await self.write_response("250 OK")
 
+    @newrelic.agent.function_trace()
     async def handle_rcpt(self, line):
         logger.info(f"RCPT TO command received: {line}")
         await self.write_response("250 OK")
 
+    @newrelic.agent.function_trace()
     async def handle_data(self, line):
         logger.info("DATA command received")
         await self.write_response("354 End data with <CR><LF>.<CR><LF>")
@@ -315,33 +341,17 @@ class SMTPSession:
         await self.server.pipeline.process(email_data)
         await self.write_response("250 OK")
 
+    @newrelic.agent.function_trace()
     async def handle_quit(self, line):
         logger.info("QUIT command received")
         await self.write_response("221 Bye")
 
+    @newrelic.agent.function_trace()
     async def handle_auth(self, line):
         logger.info(f"AUTH command received: {line}")
         # For now, accept any credentials
         await self.write_response("235 Authentication successful")
 
+@newrelic.agent.background_task()
 async def main():
-    pagerduty_token = os.getenv("PAGERDUTY_API_TOKEN")
-    pagerduty_service_id = os.getenv("PAGERDUTY_SERVICE_ID")
-    pagerduty_from_email = os.getenv("PAGERDUTY_FROM_EMAIL")
-    
-    config = SMTPConfig(
-        hostname="192.168.40.191",
-        max_message_size=50 * 1024 * 1024,  # 50 MB
-        client_timeout=300,  # 5 minutes
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
-        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
-        gpt4_task=os.getenv("GPT4_TASK"),
-        pagerduty_trigger=PagerDutyTrigger(pagerduty_token, pagerduty_service_id, pagerduty_from_email)
-    )
-
-    server = SMTPServer(config)
-    await server.start('0.0.0.0', 2525)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    pagerduty_token = os.getenv("PAGERDUTY_API_TOKEN
