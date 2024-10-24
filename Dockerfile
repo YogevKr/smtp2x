@@ -14,6 +14,7 @@ RUN sh /uv-installer.sh && rm /uv-installer.sh
 ENV PATH="/root/.cargo/bin/:$PATH"
 
 COPY pyproject.toml .
+COPY uv.lock .
 RUN uv sync --frozen
 
 # Copy the Python script into the container

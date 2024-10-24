@@ -227,6 +227,9 @@ class SMTPServer:
 
     @newrelic.agent.background_task(name='smtp2x_start_server')
     async def start(self, host, port):
+
+        weave.init('{}'.format(os.getenv('NEW_RELIC_APP_NAME')))
+
         self.is_running = True
         self.server = await asyncio.start_server(self.handle_client, host, port)
         addr = self.server.sockets[0].getsockname()
@@ -357,7 +360,6 @@ class SMTPSession:
 
 @newrelic.agent.background_task(name='smtp2x_heartbeat')
 async def heartbeat(server):
-    weave.init('{}'.format(os.getenv('NEW_RELIC_APP_NAME')))
     while True:
         if server.is_running:
             newrelic.agent.record_custom_event('smtp2xHeartbeat', {
