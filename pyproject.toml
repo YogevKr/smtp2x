@@ -1,0 +1,13 @@
+[project]
+name = "smtp2x"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.11.*"
+dependencies = [
+    "aiohttp>=3.10.10",
+    "newrelic>=10.2.0",
+    "openai>=1.52.2",
+    "pydantic>=2.9.2",
+    "weave>=0.51.17",
+]

@@ -1,3 +1,4 @@
+import weave
 import newrelic.agent
 newrelic.agent.initialize()
 
@@ -68,6 +69,7 @@ class GPT4Analyzer:
         self.task = task
 
     @newrelic.agent.function_trace()
+    @weave.op()
     async def analyze(self, image_data):
         logger.info("Uploading image to OpenAI GPT-4")
         
@@ -355,6 +357,7 @@ class SMTPSession:
 
 @newrelic.agent.background_task(name='smtp2x_heartbeat')
 async def heartbeat(server):
+    weave.init('{}'.format(os.getenv('NEW_RELIC_APP_NAME')))
     while True:
         if server.is_running:
             newrelic.agent.record_custom_event('smtp2xHeartbeat', {
