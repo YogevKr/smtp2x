@@ -1,8 +1,12 @@
 version = 1
-requires-python = "==3.11.*"
+requires-python = ">=3.11"
 resolution-markers = [
-    "sys_platform != 'linux'",
-    "sys_platform == 'linux'",
+    "python_full_version < '3.12' and sys_platform != 'linux'",
+    "python_full_version < '3.12' and sys_platform == 'linux'",
+    "python_full_version == '3.12.*' and sys_platform != 'linux'",
+    "python_full_version == '3.12.*' and sys_platform == 'linux'",
+    "python_full_version >= '3.13' and sys_platform != 'linux'",
+    "python_full_version >= '3.13' and sys_platform == 'linux'",
 ]
 
 [[package]]
@@ -336,7 +340,7 @@ wheels = [
 
 [package.optional-dependencies]
 aiohttp = [
-    { name = "aiohttp", marker = "python_full_version == '3.11.*'" },
+    { name = "aiohttp" },
 ]
 requests = [
     { name = "requests" },
@@ -716,7 +720,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-types" },
     { name = "pydantic-core" },
-    { name = "typing-extensions", marker = "python_full_version == '3.11.*'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/b7/d9e3f12af310e1120c21603644a1cd86f59060e040ec5c3a80b8f05fae30/pydantic-2.9.2.tar.gz", hash = "sha256:d155cef71265d1e9807ed1c32b4c8deec042a44a50a4188b25ac67ecd81a9c0f", size = 769917 }
 wheels = [
@@ -1035,14 +1039,14 @@ dependencies = [
     { name = "docker-pycreds" },
     { name = "gitpython" },
     { name = "platformdirs" },
-    { name = "protobuf", marker = "python_full_version == '3.11.*'" },
+    { name = "protobuf" },
     { name = "psutil" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "sentry-sdk" },
     { name = "setproctitle" },
     { name = "setuptools" },
-    { name = "typing-extensions", marker = "python_full_version == '3.11.*'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d2/de/99efb1b850f40cae30a7f036cbd2e003674bfcb9c7157a1483c14721861c/wandb-0.18.5.tar.gz", hash = "sha256:75ef47ba7fc709b787be05e558f1635d99246afeacc9369031c1be6e5b620ce6", size = 9479875 }
 wheels = [

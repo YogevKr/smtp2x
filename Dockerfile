@@ -1,17 +1,20 @@
-# Use an official Python runtime as the base image
-FROM python:3.11-slim
+FROM python:3.12-slim-bookworm
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the required packages
-RUN pip install --no-cache-dir aiohttp openai pydantic newrelic weave
+ADD https://astral.sh/uv/0.4.26/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+ENV PATH="/root/.cargo/bin/:$PATH"
+
+COPY pyproject.toml .
+RUN uv sync --frozen
 
 # Copy the Python script into the container
 COPY smtp_server.py .
