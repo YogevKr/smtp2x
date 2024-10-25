@@ -224,7 +224,7 @@ class GeminiAnalyzer:
                 # Cleanup
                 os.remove(temp_path)
                 
-                return result['result']
+                return bool(result['result'])
                 
         except Exception as e:
             error_type = type(e).__name__
