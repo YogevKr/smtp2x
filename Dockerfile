@@ -23,6 +23,8 @@ RUN pip install --no-cache-dir openai
 RUN pip install --no-cache-dir pydantic
 RUN pip install --no-cache-dir newrelic
 RUN pip install --no-cache-dir weave
+RUN pip install --no-cache-dir google-generativeai
+RUN pip install --no-cache-dir google.ai.generativelanguage
 
 # Copy the Python script into the container
 COPY smtp_server.py .

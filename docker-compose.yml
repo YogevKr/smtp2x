@@ -16,6 +16,9 @@ services:
       - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY}
       - NEW_RELIC_APP_NAME=${NEW_RELIC_APP_NAME}
       - WANDB_API_KEY=${WANDB_API_KEY}
+      - ENABLED_ANALYZERS=${ENABLED_ANALYZERS}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_TASK=${GEMINI_TASK}
     volumes:
       - ./smtp_server.py:/app/smtp_server.py
     restart: unless-stopped
