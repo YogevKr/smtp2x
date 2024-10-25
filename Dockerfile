@@ -22,7 +22,6 @@ RUN pip install --no-cache-dir aiohttp
 RUN pip install --no-cache-dir openai
 RUN pip install --no-cache-dir pydantic
 RUN pip install --no-cache-dir newrelic
-RUN pip install --no-cache-dir weave
 RUN pip install --no-cache-dir google-generativeai
 RUN pip install --no-cache-dir google.ai.generativelanguage
 
