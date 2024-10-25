@@ -14,6 +14,9 @@ from openai import AsyncOpenAI
 import json
 from pydantic import BaseModel
 import time
+import google.generativeai as genai
+from google.ai.generativelanguage_v1beta.types import content
+from typing import Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -31,15 +34,80 @@ class AnalyticEvent(BaseModel):
     analysis: str
     result: bool
 
+class PagerDutyTrigger:
+    def __init__(self, api_token, service_id, from_email):
+        self.api_token = api_token
+        self.service_id = service_id
+        self.from_email = from_email
+        self.url = "https://api.pagerduty.com/incidents"
+
+    @newrelic.agent.function_trace()
+    async def trigger_incident(self, title, details, urgency="high"):
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.pagerduty+json;version=2",
+            "Authorization": f"Token token={self.api_token}",
+            "From": self.from_email
+        }
+        
+        payload = {
+            "incident": {
+                "type": "incident",
+                "title": title,
+                "service": {
+                    "id": self.service_id,
+                    "type": "service_reference"
+                },
+                "urgency": urgency,
+                "body": {
+                    "type": "incident_body",
+                    "details": details
+                }
+            }
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                with newrelic.agent.FunctionTrace(name='pagerduty_api_call', group='External'):
+                    async with session.post(self.url, json=payload, headers=headers) as response:
+                        response_text = await response.text()
+                        if response.status == 201:
+                            logger.info("PagerDuty incident created successfully")
+                            newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'success'})
+                            return json.loads(response_text)
+                        else:
+                            logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
+                            logger.error(f"Response: {response_text}")
+                            newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'error', 'error_code': response.status})
+                            return None
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error when creating PagerDuty incident: {str(e)}")
+                newrelic.agent.record_exception()
+            except Exception as e:
+                logger.error(f"Unexpected error when creating PagerDuty incident: {str(e)}")
+                newrelic.agent.record_exception()
+        return None
+
 class SMTPConfig:
-    def __init__(self, hostname, max_message_size, client_timeout, openai_api_key, telegram_bot_token, telegram_chat_id, gpt4_task, pagerduty_trigger):
+    def __init__(self, hostname: str, max_message_size: int, client_timeout: int, 
+                 enabled_analyzers: list[str],
+                 openai_api_key: str | None = None,
+                 gemini_api_key: str | None = None,
+                 telegram_bot_token: str | None = None,
+                 telegram_chat_id: str | None = None,
+                 gpt4_task: str | None = None,
+                 gemini_task: str | None = None,
+                 pagerduty_trigger: PagerDutyTrigger | None = None):
         self.hostname = hostname
         self.max_message_size = max_message_size
         self.client_timeout = client_timeout
+        self.enabled_analyzers = enabled_analyzers
         self.openai_api_key = openai_api_key
+        self.gemini_api_key = gemini_api_key
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
         self.gpt4_task = gpt4_task
+        self.gemini_task = gemini_task
         self.pagerduty_trigger = pagerduty_trigger
 
 class MessageTransformer:
@@ -103,6 +171,80 @@ class GPT4Analyzer:
             newrelic.agent.record_exception()
             return False
 
+class GeminiAnalyzer:
+    def __init__(self, api_key: str, task: str):
+        genai.configure(api_key=api_key)
+        self.task = task
+        self.generation_config = {
+            "temperature": 1,
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_output_tokens": 8192,
+            "response_schema": content.Schema(
+                type=content.Type.OBJECT,
+                required=["analysis", "result"],
+                properties={
+                    "analysis": content.Schema(type=content.Type.STRING),
+                    "result": content.Schema(type=content.Type.BOOLEAN),
+                },
+            ),
+            "response_mime_type": "application/json"
+        }
+        self.model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash-002",
+            generation_config=self.generation_config
+        )
+
+    @newrelic.agent.function_trace()
+    async def analyze(self, image_data: bytes) -> bool:
+        logger.info("Analyzing image with Gemini")
+        
+        try:
+            with newrelic.agent.FunctionTrace(name='gemini_api_call', group='External'):
+                # Save image temporarily
+                temp_path = "/tmp/temp_image.jpg"
+                with open(temp_path, "wb") as f:
+                    f.write(image_data)
+                
+                # Upload to Gemini
+                image_file = genai.upload_file(temp_path, mime_type="image/jpeg")
+                
+                # Create chat session
+                chat = self.model.start_chat()
+                response = chat.send_message([image_file, self.task])
+                
+                # Parse response
+                result = json.loads(response.text)
+                logger.info(f"Gemini response: {result}")
+                newrelic.agent.record_custom_event('GeminiAnalysis', {
+                    'status': 'success',
+                    'result': result['result']
+                })
+                
+                # Cleanup
+                os.remove(temp_path)
+                
+                return bool(result['result'])
+                
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logger.error(f"Error from Gemini API: {error_msg}")
+            
+            # Record detailed error information to New Relic
+            newrelic.agent.record_custom_event('GeminiAnalysis', {
+                'status': 'error',
+                'error_type': error_type,
+                'error_message': error_msg
+            })
+            newrelic.agent.record_exception(params={
+                'error_type': error_type,
+                'analyzer': 'gemini'
+            })
+            
+            # Re-raise the exception to be handled by the calling code
+            raise
+
 class TelegramSender:
     def __init__(self, bot_token, chat_id):
         self.bot_token = bot_token
@@ -131,76 +273,42 @@ class TelegramSender:
                         logger.error(f"Error sending image to Telegram: {response.status}")
                         newrelic.agent.record_custom_event('TelegramSend', {'status': 'error', 'error_code': response.status})
 
-class PagerDutyTrigger:
-    def __init__(self, api_token, service_id, from_email):
-        self.api_token = api_token
-        self.service_id = service_id
-        self.from_email = from_email
-        self.url = "https://api.pagerduty.com/incidents"
-
-    @newrelic.agent.function_trace()
-    async def trigger_incident(self, title, details, urgency="high"):
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/vnd.pagerduty+json;version=2",
-            "Authorization": f"Token token={self.api_token}",
-            "From": self.from_email
-        }
-        
-        payload = {
-            "incident": {
-                "type": "incident",
-                "title": title,
-                "service": {
-                    "id": self.service_id,
-                    "type": "service_reference"
-                },
-                "urgency": urgency,
-                "body": {
-                    "type": "incident_body",
-                    "details": details
-                }
-            }
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            try:
-                with newrelic.agent.FunctionTrace(name='pagerduty_api_call', group='External'):
-                    async with session.post(self.url, json=payload, headers=headers) as response:
-                        response_text = await response.text()
-                        if response.status == 201:
-                            logger.info("PagerDuty incident created successfully")
-                            newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'success'})
-                            return json.loads(response_text)
-                        else:
-                            logger.error(f"Failed to create PagerDuty incident. Status code: {response.status}")
-                            logger.error(f"Response: {response_text}")
-                            newrelic.agent.record_custom_event('PagerDutyTrigger', {'status': 'error', 'error_code': response.status})
-                            return None
-            except aiohttp.ClientError as e:
-                logger.error(f"Network error when creating PagerDuty incident: {str(e)}")
-                newrelic.agent.record_exception()
-            except Exception as e:
-                logger.error(f"Unexpected error when creating PagerDuty incident: {str(e)}")
-                newrelic.agent.record_exception()
-        return None
-
 class ProcessingPipeline:
-    def __init__(self, config):
+    def __init__(self, config: SMTPConfig):
         self.transformer = MessageTransformer()
-        self.analyzer = GPT4Analyzer(config.openai_api_key, config.gpt4_task)
+        self.analyzers: list[tuple[str, Any]] = []
+        
+        if "gpt4" in config.enabled_analyzers and config.openai_api_key:
+            self.analyzers.append(("gpt4", GPT4Analyzer(config.openai_api_key, config.gpt4_task)))
+            
+        if "gemini" in config.enabled_analyzers and config.gemini_api_key:
+            self.analyzers.append(("gemini", GeminiAnalyzer(config.gemini_api_key, config.gemini_task)))
+            
+        if not self.analyzers:
+            raise ValueError("No analyzers configured! Set ENABLED_ANALYZERS env var.")
+            
         self.sender = TelegramSender(config.telegram_bot_token, config.telegram_chat_id)
         self.pagerduty = config.pagerduty_trigger
 
     @newrelic.agent.function_trace()
-    async def process(self, email_data):
+    async def process(self, email_data: bytes) -> None:
         email_message = await self.transformer.transform(email_data)
         logger.info(f"Processed email: From: {email_message.sender}, Subject: {email_message.subject}")
 
         if email_message.image_data:
-            analysis_result = await self.analyzer.analyze(email_message.image_data)
-
-            if analysis_result:
+            # Run all enabled analyzers in parallel
+            analysis_tasks = [
+                analyzer.analyze(email_message.image_data) 
+                for name, analyzer in self.analyzers
+            ]
+            results = await asyncio.gather(*analysis_tasks)
+            
+            # Log results from each analyzer
+            for (name, _), result in zip(self.analyzers, results):
+                logger.info(f"{name} analysis result: {result}")
+            
+            # Trigger actions if any analyzer returns True
+            if any(results):
                 await self.sender.send(email_message.image_data)
                 incident = await self.pagerduty.trigger_incident(
                     title=f"Critical image detected: {email_message.subject}",
@@ -212,7 +320,7 @@ class ProcessingPipeline:
                 else:
                     logger.error("Failed to create PagerDuty incident")
             else:
-                logger.info("Analysis result is negative. Not sending to Telegram or triggering PagerDuty.")
+                logger.info("All analysis results are negative. Not sending to Telegram or triggering PagerDuty.")
         else:
             logger.info("No image attachment found in the email.")
 
@@ -377,14 +485,20 @@ async def main():
     pagerduty_service_id = os.getenv("PAGERDUTY_SERVICE_ID")
     pagerduty_from_email = os.getenv("PAGERDUTY_FROM_EMAIL")
     
+    enabled_analyzers = os.getenv("ENABLED_ANALYZERS").lower().split(",")
+    logger.info(f"Enabled analyzers: {enabled_analyzers}")
+    
     config = SMTPConfig(
         hostname="192.168.40.191",
         max_message_size=50 * 1024 * 1024,  # 50 MB
         client_timeout=300,  # 5 minutes
+        enabled_analyzers=enabled_analyzers,
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
         gpt4_task=os.getenv("GPT4_TASK"),
+        gemini_task=os.getenv("GEMINI_TASK"),
         pagerduty_trigger=PagerDutyTrigger(pagerduty_token, pagerduty_service_id, pagerduty_from_email)
     )
 
