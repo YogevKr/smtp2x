@@ -208,6 +208,7 @@ class GeminiAnalyzer:
                 
                 # Upload to Gemini
                 image_file = genai.upload_file(temp_path, mime_type="image/jpeg")
+                logger.info(f"Uploaded image to Gemini: {image_file}")
                 
                 # Create chat session
                 chat = self.model.start_chat()
