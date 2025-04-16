@@ -510,6 +510,10 @@ async def main():
         'client_timeout': config.client_timeout
     })
 
+    logger.info(f"GPT-4 Task: {config.gpt4_task}")
+    logger.info(f"Gemini Task: {config.gemini_task}")
+    logger.info(f"Enabled analyzer: {config.enabled_analyzers}")
+
     server = SMTPServer(config)
     
     # Create tasks for running the server and the heartbeat
