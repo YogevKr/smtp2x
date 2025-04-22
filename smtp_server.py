@@ -191,7 +191,7 @@ class GeminiAnalyzer:
             "response_mime_type": "application/json"
         }
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
+            model_name="gemini-2.5-flash-preview-04-17",
             generation_config=self.generation_config
         )
 
